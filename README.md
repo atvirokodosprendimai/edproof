@@ -68,7 +68,6 @@ independently. No central authority. Scale-neutral.
 **Key backing orthogonal.** File, YubiKey, TPM, threshold — the
 protocol does not observe the backing layer.
 
-## Related
+## What it this about? 
 
-- [`atvirokodosprendimai/coroot-cicd`](https://github.com/atvirokodosprendimai/coroot-cicd) —
-  Coroot observability backend profile (Appendix B of RFC-EDPROOF.md)
+- https://github.com/atvirokodosprendimai/edproof/STORY.md
