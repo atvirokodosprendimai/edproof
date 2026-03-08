@@ -70,4 +70,4 @@ protocol does not observe the backing layer.
 
 ## What it this about? 
 
-- STORY.md
+- [STORY](STORY.md)
