@@ -70,4 +70,4 @@ protocol does not observe the backing layer.
 
 ## What it this about? 
 
-- https://github.com/atvirokodosprendimai/edproof/STORY.md
+- STORY.md
