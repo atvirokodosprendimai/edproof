@@ -68,6 +68,6 @@ independently. No central authority. Scale-neutral.
 **Key backing orthogonal.** File, YubiKey, TPM, threshold — the
 protocol does not observe the backing layer.
 
-## What it this about? 
+## What is this about? 
 
 - [STORY](STORY.md)
