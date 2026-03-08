@@ -5,6 +5,29 @@ Layered identity protocol for humans and machines.
 Ed25519 public key cryptography. Five cleanly separated layers:
 proof, credential, registry, policy, backing. Formally verified.
 
+## Quick Start — Generating a Key
+
+Every entity (human or machine) needs an Ed25519 key pair. Generate one with:
+
+```bash
+ssh-keygen -t ed25519 -f identity -C "entity@context"
+```
+
+This produces two files:
+
+- `identity` — private key (never share or leave the host)
+- `identity.pub` — public key (safe to publish)
+
+The SHA-256 fingerprint of the public key becomes the entity's stable
+identifier within EdProof:
+
+```bash
+ssh-keygen -l -E sha256 -f identity.pub
+```
+
+Once you have a key pair, present the public key to an EdProof issuer to
+obtain a credential (see [RFC-EDPROOF.md §4](RFC-EDPROOF.md#4-layer-1--proof)).
+
 ## Documents
 
 - [`RFC-EDPROOF.md`](RFC-EDPROOF.md) — full protocol specification (v0.1)
