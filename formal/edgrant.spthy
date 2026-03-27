@@ -2,57 +2,60 @@
  * Tamarin Model: EdGrant Permission Grant Protocol
  *
  * Companion to RFC-EDPROOF.md — models the permission grant flow
- * where a bot requests scoped, time-limited access to a resource
- * with dual approval (bot owner + resource owner).
+ * where a bot requests scoped, time-limited access to a resource.
  *
  * This model assumes EdProof identity is already established.
  * It does NOT re-verify the attestation exchange (see edproof.spthy).
  * Instead, it takes as given that each entity holds a long-term
  * Ed25519 key pair and focuses on the grant lifecycle.
  *
- * Protocol (four phases):
+ * Core protocol (two entities — bot and resource owner):
  *
  *   Phase 0 — Discovery (not modeled: no security-critical state)
  *
  *   Phase 1 — Request:
- *     Bot -> BotOwner:  { bot_fp, resource, scopes, ttl,
- *                          sign(<'grant_request', resource, scopes, ttl>, sk_bot) }
- *
- *   Phase 2 — Approval:
- *     BotOwner -> ResourceOwner:
+ *     Bot -> ResourceOwner:
  *       { bot_fp, resource, scopes, ttl,
- *         sign(<'bot_owner_approval', bot_fp, resource, scopes, ttl>, sk_bot_owner) }
+ *         sign(<'grant_request', resource, scopes, ttl>, sk_bot),
+ *         pk_bot }
  *
+ *   Phase 2 — Grant:
  *     ResourceOwner -> Bot:
- *       grant = senc(<bot_fp, resource, scopes, ttl,
- *                      bot_owner_approval_sig,
- *                      sign(<'resource_owner_grant', bot_fp, resource, scopes, ttl>,
- *                           sk_resource_owner)>,
- *                    tls_key)
+ *       senc(<bot_fp, resource, scopes, ttl,
+ *              sign(<'resource_owner_grant', bot_fp, resource, scopes, ttl>,
+ *                   sk_resource_owner),
+ *              pk_ro,
+ *              grant_token>,
+ *            tls_key)
  *
  *   Phase 3 — Access:
  *     Bot -> Resource:  { credential, grant_token }
- *     Resource verifies: bot identity, both signatures, scope, TTL
+ *     Resource verifies: bot identity, grant signature, scope, TTL
+ *
+ * Bot owner approval is NOT part of the protocol. It is a policy
+ * decision made by the resource owner. The resource owner MAY:
+ *   - Require bot owner co-signature (policy)
+ *   - Accept bot's request directly (policy)
+ *   - Require additional evidence (policy)
+ * The protocol does not prescribe this. The resource owner owns
+ * the decision — consistent with EdProof Layer 4 sovereignty.
  *
  * Namespace constants:
  *   'grant_request'         — bot's request signature
- *   'bot_owner_approval'    — bot owner's approval signature
  *   'resource_owner_grant'  — resource owner's grant signature
  *
- *   These prevent cross-phase signature replay (a bot owner approval
- *   cannot be replayed as a resource owner grant, etc.).
+ *   These prevent cross-phase signature replay.
  *
  * Adversary model: Dolev-Yao. TLS protects the grant delivery
- * (Phase 2 → Bot). The request and approval messages traverse
- * the open network.
+ * (Phase 2 → Bot). The request message traverses the open network.
  *
  * Verified properties:
- *   - dual_approval_required     (grant requires both approver signatures)
+ *   - request_authenticity       (grant traces back to a real bot request)
  *   - no_scope_escalation        (granted scopes match requested scopes)
  *   - bot_binding                (grant is bound to the requesting bot's key)
- *   - no_approval_forgery        (attacker cannot forge either approval)
+ *   - no_request_forgery         (attacker cannot forge bot's request)
  *   - grant_secrecy              (attacker cannot learn the grant token)
- *   - approval_chain_integrity   (resource owner saw bot owner's approval)
+ *   - grant_authorization        (only resource owner can issue grants)
  *   - executability              (protocol can complete — non-vacuity)
  *
  * To verify:
@@ -77,10 +80,13 @@ functions: fingerprint/1
  * Key Infrastructure
  * ============================================================
  *
- * Three distinct entities, each with an Ed25519 key pair:
+ * Two protocol entities, each with an Ed25519 key pair:
  *   - Bot:            the entity requesting access
- *   - Bot Owner:      approves the bot's request
- *   - Resource Owner: grants access to the resource
+ *   - Resource Owner: evaluates request and grants access
+ *
+ * Bot Owner is not a protocol entity — bot owner approval
+ * is a policy concern of the resource owner. The resource
+ * owner may require it, but the protocol does not enforce it.
  *
  * All public keys are published (Out). Private keys are held.
  */
@@ -90,13 +96,6 @@ rule Bot_KeyGen:
   -->
     [ !BotKey(~sk_bot, pk(~sk_bot))
     , Out(pk(~sk_bot))
-    ]
-
-rule BotOwner_KeyGen:
-    [ Fr(~sk_bo) ]
-  -->
-    [ !BotOwnerKey(~sk_bo, pk(~sk_bo))
-    , Out(pk(~sk_bo))
     ]
 
 rule ResourceOwner_KeyGen:
@@ -113,11 +112,15 @@ rule ResourceOwner_KeyGen:
  * The bot constructs a permission request:
  *   - Identifies the resource and desired scopes + TTL
  *   - Signs the request with namespace 'grant_request'
- *   - Sends to the bot owner for first approval
+ *   - Sends directly to the resource owner
  *
  * ~resource and ~scopes are fresh values representing the
  * specific resource and scope set. ~ttl represents the
  * requested time-to-live.
+ *
+ * The bot also establishes a fresh TLS session key (~tls_key)
+ * for secure grant delivery. This key is stored in state and
+ * never placed on the public channel.
  */
 rule Bot_Request:
     [ !BotKey(~sk_bot, pk_bot)
@@ -135,70 +138,43 @@ rule Bot_Request:
     ]
 
 /* ============================================================
- * Phase 2a: Bot Owner Approval
+ * Phase 2: Resource Owner Grant
  * ============================================================
  *
- * The bot owner receives the request, verifies the bot's
- * signature (namespace 'grant_request'), and if satisfied,
- * signs an approval (namespace 'bot_owner_approval').
+ * The resource owner receives the bot's request, verifies the
+ * bot's signature (namespace 'grant_request'), and if its
+ * policy is satisfied, creates and issues the grant.
  *
- * The bot owner's signature covers the bot's fingerprint,
- * resource, scopes, and TTL — binding the approval to this
- * specific request.
- */
-rule BotOwner_Approve:
-    let
-        bot_fp   = fingerprint(pk_bot)
-        req_msg  = <'grant_request', resource, scopes, ttl>
-        appr_msg = <'bot_owner_approval', bot_fp, resource, scopes, ttl>
-    in
-    [ !BotOwnerKey(~sk_bo, pk_bo)
-    , In(<bot_fp, resource, scopes, ttl, req_sig, pk_bot>)
-    ]
-  --[ VerifyBotRequest(verify(req_sig, req_msg, pk_bot))
-    , BotOwnerApproved(pk_bo, pk_bot, resource, scopes, ttl)
-    ]->
-    [ Out(<bot_fp, resource, scopes, ttl,
-           sign(appr_msg, ~sk_bo),
-           pk_bo, pk_bot>)
-    ]
-
-/* ============================================================
- * Phase 2b: Resource Owner Grant
- * ============================================================
- *
- * The resource owner receives the bot owner's approved request,
- * verifies the bot owner's signature (namespace 'bot_owner_approval'),
- * and if satisfied, creates the grant.
+ * Policy evaluation (including whether bot owner approval is
+ * required) happens BEFORE this rule fires. The model abstracts
+ * policy as a precondition — if this rule fires, the resource
+ * owner's policy was satisfied. What that policy requires
+ * (bot owner co-sign, risk assessment, scope limits, etc.)
+ * is out of scope for the formal model.
  *
  * The grant is a fresh credential (~grant_token) delivered to
- * the bot encrypted with the TLS session key. The resource owner's
- * signature (namespace 'resource_owner_grant') covers the same
- * fields, creating a dual-signed approval chain.
- *
- * The resource owner retrieves TLSGrant from state — this models
- * the TLS session between bot and resource owner for secure
- * grant delivery.
+ * the bot encrypted with the TLS session key. The resource
+ * owner's signature (namespace 'resource_owner_grant') covers
+ * the bot's fingerprint, resource, scopes, and TTL — binding
+ * the grant to this specific request.
  */
 rule ResourceOwner_Grant:
     let
         bot_fp    = fingerprint(pk_bot)
-        appr_msg  = <'bot_owner_approval', bot_fp, resource, scopes, ttl>
+        req_msg   = <'grant_request', resource, scopes, ttl>
         grant_msg = <'resource_owner_grant', bot_fp, resource, scopes, ttl>
     in
     [ !ResourceOwnerKey(~sk_ro, pk_ro)
-    , In(<bot_fp, resource, scopes, ttl, bo_appr_sig, pk_bo, pk_bot>)
+    , In(<bot_fp, resource, scopes, ttl, req_sig, pk_bot>)
     , TLSGrant(pk_bot, resource, scopes, ttl, tls_key)
     , Fr(~grant_token)
     ]
-  --[ VerifyBotOwnerApproval(verify(bo_appr_sig, appr_msg, pk_bo))
-    , ResourceOwnerGranted(pk_ro, pk_bo, pk_bot, resource, scopes, ttl, ~grant_token)
-    , DualApproval(pk_bo, pk_ro, pk_bot, resource, scopes, ttl)
+  --[ VerifyBotRequest(verify(req_sig, req_msg, pk_bot))
+    , ResourceOwnerGranted(pk_ro, pk_bot, resource, scopes, ttl, ~grant_token)
     , GrantSecret(~grant_token, pk_bot)
     , GrantBound(fingerprint(pk_bot), pk_bot, resource, scopes, ttl)
     ]->
     [ Out(senc(<bot_fp, resource, scopes, ttl,
-                bo_appr_sig, pk_bo,
                 sign(grant_msg, ~sk_ro), pk_ro,
                 ~grant_token>, tls_key))
     ]
@@ -216,7 +192,6 @@ rule Bot_ReceiveGrant:
     in
     [ BotState(~sk_bot, pk_bot, resource, scopes, ttl, ~tls_key)
     , In(senc(<bot_fp, resource, scopes, ttl,
-               bo_appr_sig, pk_bo,
                ro_grant_sig, pk_ro,
                grant_token>, ~tls_key))
     ]
@@ -224,41 +199,41 @@ rule Bot_ReceiveGrant:
     , BotHasGrant(grant_token)
     ]->
     [ BotGranted(pk_bot, resource, scopes, ttl, grant_token,
-                 bo_appr_sig, pk_bo, ro_grant_sig, pk_ro)
+                 ro_grant_sig, pk_ro)
     ]
 
 /* ============================================================
- * Restrictions: Signature Verification
+ * Restriction: Signature Verification
  * ============================================================
  *
- * Bot owner verifies bot's request signature.
- * Resource owner verifies bot owner's approval signature.
+ * Resource owner verifies bot's request signature.
+ * This models the resource owner's verify() call: only
+ * well-formed signatures (made with the correct private key)
+ * are accepted.
  */
 restriction VerifyBotRequestSig:
     "All x #i. VerifyBotRequest(x) @ #i ==> x = true"
-
-restriction VerifyBotOwnerApprovalSig:
-    "All x #i. VerifyBotOwnerApproval(x) @ #i ==> x = true"
 
 /* ============================================================
  * Security Lemmas
  * ============================================================ */
 
 /*
- * Lemma 1: Dual Approval Required
+ * Lemma 1: Request Authenticity
  *
- * If a grant is issued, both the bot owner and resource owner
- * approved it. No grant can exist with only one signature.
+ * If the resource owner issued a grant for a bot with specific
+ * scopes and TTL, the bot actually requested those exact scopes
+ * and TTL. The grant traces back to a genuine bot request.
  *
- * Follows from: ResourceOwner_Grant requires VerifyBotOwnerApproval
- * (which requires the bot owner's signature), and issues
- * DualApproval only after both checks pass.
+ * Follows from: ResourceOwner_Grant verifies the bot's signature
+ * (namespace 'grant_request') which covers (resource, scopes, ttl).
+ * Only the bot's sk can produce this signature.
  */
-lemma dual_approval_required:
-    "All pk_bo pk_ro pk_bot resource scopes ttl #i.
-        DualApproval(pk_bo, pk_ro, pk_bot, resource, scopes, ttl) @ #i
+lemma request_authenticity:
+    "All pk_ro pk_bot resource scopes ttl grant_token #i.
+        ResourceOwnerGranted(pk_ro, pk_bot, resource, scopes, ttl, grant_token) @ #i
     ==>
-        ( Ex #j. BotOwnerApproved(pk_bo, pk_bot, resource, scopes, ttl) @ #j
+        ( Ex #j. BotRequested(pk_bot, resource, scopes, ttl) @ #j
           & #j < #i
         )
     "
@@ -266,12 +241,13 @@ lemma dual_approval_required:
 /*
  * Lemma 2: No Scope Escalation
  *
- * The granted scopes match what the bot requested and what
- * both approvers signed. No party can widen the scopes.
+ * The granted scopes match what the bot requested. No party
+ * can widen the scopes between request and grant.
  *
- * Follows from: all three signatures (request, approval, grant)
- * cover the same (resource, scopes, ttl) tuple. If any differ,
- * signature verification fails.
+ * Follows from: the resource owner's grant signature and the
+ * bot's request signature both cover the same (resource, scopes,
+ * ttl) tuple. If they differ, the bot's signature verification
+ * fails at ResourceOwner_Grant.
  */
 lemma no_scope_escalation:
     "All pk_bot resource scopes ttl grant_token #i.
@@ -302,18 +278,19 @@ lemma bot_binding:
     "
 
 /*
- * Lemma 4: No Approval Forgery
+ * Lemma 4: No Request Forgery
  *
- * If a grant was issued for a bot, the bot actually made the
- * request. The attacker cannot forge a request on behalf of
- * a bot without its private key.
+ * If a grant was issued, the bot actually made the request.
+ * The attacker cannot forge a request on behalf of a bot
+ * without its private key.
  *
- * Follows from: BotOwner_Approve verifies the bot's signature
- * (namespace 'grant_request'). Only the bot's sk can produce it.
+ * This is the same property as request_authenticity but
+ * stated from the forgery perspective: the attacker cannot
+ * produce a valid 'grant_request' signature without sk_bot.
  */
-lemma no_approval_forgery:
-    "All pk_bo pk_bot resource scopes ttl #i.
-        BotOwnerApproved(pk_bo, pk_bot, resource, scopes, ttl) @ #i
+lemma no_request_forgery:
+    "All pk_ro pk_bot resource scopes ttl grant_token #i.
+        ResourceOwnerGranted(pk_ro, pk_bot, resource, scopes, ttl, grant_token) @ #i
     ==>
         ( Ex #j. BotRequested(pk_bot, resource, scopes, ttl) @ #j
           & #j < #i
@@ -336,21 +313,25 @@ lemma grant_secrecy:
     "
 
 /*
- * Lemma 6: Approval Chain Integrity
+ * Lemma 6: Grant Authorization
  *
- * If a grant was issued by the resource owner, the resource
- * owner verified the bot owner's approval. The chain is
- * unbroken: bot → bot owner → resource owner.
+ * Only a resource owner (holder of a ResourceOwnerKey) can
+ * issue a grant. If a bot received a grant, a resource owner
+ * issued it.
  *
- * Follows from: ResourceOwner_Grant checks VerifyBotOwnerApproval
- * before issuing DualApproval and ResourceOwnerGranted.
+ * Follows from: the grant is encrypted with tls_key (only
+ * accessible via TLSGrant state fact consumed by
+ * ResourceOwner_Grant), and the grant contains the resource
+ * owner's signature. The bot verifies the grant came from a
+ * legitimate resource owner by checking the signature.
  */
-lemma approval_chain_integrity:
-    "All pk_ro pk_bo pk_bot resource scopes ttl grant_token #i.
-        ResourceOwnerGranted(pk_ro, pk_bo, pk_bot, resource, scopes, ttl, grant_token) @ #i
+lemma grant_authorization:
+    "All pk_bot resource scopes ttl grant_token #i.
+        BotReceivedGrant(pk_bot, resource, scopes, ttl, grant_token) @ #i
     ==>
-        ( Ex #j. BotOwnerApproved(pk_bo, pk_bot, resource, scopes, ttl) @ #j
-          & #j < #i
+        ( Ex pk_ro #j.
+            ResourceOwnerGranted(pk_ro, pk_bot, resource, scopes, ttl, grant_token) @ #j
+            & #j < #i
         )
     "
 
