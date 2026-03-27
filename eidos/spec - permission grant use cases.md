@@ -49,9 +49,11 @@ For legacy resources that don't support EdProof natively, a sidecar/proxy sits i
 
 ---
 
-## Use Case A: Gyros Resources
+## Use Case A: Gyros (Jira)
 
-### A1. Bot reads a Gyros board for status reporting
+Gyros is Jira. Jira does not support EdProof natively — all Gyros use cases require a **sidecar** that holds the Jira API token and proxies authorized operations.
+
+### A1. Bot reads a Jira board for status reporting
 
 **Actors**
 - Bot: `deploy-status-bot` (fingerprint `SHA256:abc1...`), owned by Platform Team
@@ -70,10 +72,13 @@ reason:      "Fetch task statuses for deploy summary report"
 1. Bot owner (Platform Team lead): auto-approved by policy — "deploy-status-bot may request `read` on any gyros board for up to 4h"
 2. Resource owner (Project Alpha board owner): auto-approved by policy — "`read` scopes auto-approved for bots with verified EdProof identity"
 
-**Access pattern**
-- Bot presents identity credential + capability token to Gyros
-- Gyros verifies: identity valid, grant signatures valid, TTL not expired, no revocation
-- Bot reads board state (tasks, statuses, filters) — write operations rejected
+**Sidecar required** — Jira doesn't support EdProof natively.
+
+**Access pattern (via sidecar)**
+- Sidecar holds a Jira API token with project-scoped permissions
+- Bot presents identity credential + capability token to sidecar
+- Sidecar verifies: identity valid, grant signatures valid, TTL not expired, no revocation
+- Sidecar proxies read requests to Jira — write operations rejected at the sidecar
 - After 1h, the token expires. Bot must re-request if it needs more time
 
 **Audit trail**
@@ -84,7 +89,7 @@ reason:      "Fetch task statuses for deploy summary report"
 
 ---
 
-### A2. Bot writes filters on a Gyros board for automated triage
+### A2. Bot writes filters on a Jira board for automated triage
 
 **Actors**
 - Bot: `triage-bot` (fingerprint `SHA256:jkl4...`), owned by QA Team
@@ -103,9 +108,11 @@ reason:      "Create priority filters based on defect severity"
 1. Bot owner (QA Team lead): manual approval — `write` scopes require human sign-off per QA team policy
 2. Resource owner (Sprint Board owner): manual approval — board owner reviews that `write:filter` is reasonable for triage automation
 
-**Access pattern**
-- Bot reads current board state, creates/modifies filters only
-- Cannot modify tasks, numbers, board settings, or other entities — only `filter` scope granted
+**Sidecar required.**
+
+**Access pattern (via sidecar)**
+- Sidecar proxies reads and filter write operations to Jira
+- Cannot modify tasks, numbers, board settings, or other entities — sidecar rejects anything outside `filter` scope
 - After 30m, grant expires automatically
 
 **Audit trail**
@@ -116,11 +123,11 @@ reason:      "Create priority filters based on defect severity"
 
 ---
 
-### A3. Bot needs admin access to restructure a Gyros project
+### A3. Bot needs admin access to restructure a Jira project
 
 **Actors**
 - Bot: `reorg-bot`, owned by Engineering Manager
-- Resource owner: Gyros project owner
+- Resource owner: Jira project owner
 
 **Request**
 ```
@@ -132,11 +139,14 @@ reason:      "Restructure boards and reassign ownership per Q2 reorg plan"
 
 **Approval chain**
 1. Bot owner (Engineering Manager): manual approval — `admin` always requires explicit sign-off
-2. Resource owner (Gyros project owner): manual approval — `admin` on a project is high-risk; owner verifies the reorg plan before approving
+2. Resource owner (Jira project owner): manual approval — `admin` on a project is high-risk; owner verifies the reorg plan before approving
 
-**Access pattern**
-- Bot has full project access for 2h
-- All operations logged individually
+**Sidecar required.**
+
+**Access pattern (via sidecar)**
+- Sidecar holds a Jira API token with project admin permissions
+- Bot has full project access for 2h, proxied through sidecar
+- All operations logged individually by sidecar
 - Resource owner can revoke at any time if something goes wrong
 
 **What revocation looks like**
