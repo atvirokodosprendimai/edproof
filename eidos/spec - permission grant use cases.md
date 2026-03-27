@@ -13,11 +13,11 @@ Concrete scenarios showing how bots and services use EdProof identity to request
 
 Every use case assumes:
 - The bot has an EdProof identity (Ed25519 key pair, attested credential) — stable, long-lived
-- The bot owner has an EdProof identity
 - The resource owner has an EdProof identity
 - Permission grants are separate artifacts from identity credentials — a "visa" alongside the "passport"
-- Approval is sequential: bot owner approves first, then resource owner
-- Either approval can be policy-automated — EdProof does not prescribe how
+- The **resource owner decides** whether to grant access — this is the only protocol-level requirement
+- The resource owner's policy MAY require bot owner approval, additional evidence, or risk assessment — but this is the resource owner's concern, not the protocol's
+- The protocol has two entities: bot and resource owner. Bot owner is a policy concept, not a protocol entity
 
 ## Model
 
@@ -102,6 +102,10 @@ After discovery, the bot constructs a request using what the resource told it. T
 For resources that don't support EdProof natively, the resource owner may implement a sidecar/proxy that sits in front of their resource. The sidecar handles discovery, verification, and proxying. This is the resource owner's implementation concern — not part of EdProof.
 
 > **RFC opportunity**: The permission request → approval → grant → access flow described in these use cases could become its own RFC (e.g., RFC-EDGRANT), built on EdProof identity as its foundation. EdProof stays identity-only; the grant protocol is a separate specification.
+
+---
+
+**Note on approval chains in use cases below:** Many use cases show bot owner approval as a step. This is an example of what a resource owner's policy might require — it is NOT a protocol requirement. The resource owner decides what evidence it needs before granting. Some resource owners will require bot owner co-approval. Others won't. The protocol only requires: bot requests, resource owner decides.
 
 ---
 
@@ -490,11 +494,11 @@ Every use case follows these principles:
 
 1. **Least privilege**: Bot requests only the scopes it needs, for only the time it needs them
 2. **TTL always**: Every grant expires. No permanent permissions. Re-request if you need more time
-3. **Dual approval always**: Bot owner and resource owner both sign off (manually or via policy)
+3. **Resource owner decides**: The resource owner's policy determines what's required — bot owner approval, risk assessment, scope limits, or nothing at all. The protocol doesn't prescribe approval chains
 4. **Identity is stable, permissions are temporal**: EdProof credential lives for years; permission grants live for minutes to hours
-5. **Revocation is possible**: Any approver can revoke a grant before TTL expires
-6. **Audit is complete**: Every request, approval, access, and revocation is logged with who, what, when, and why
-7. **Sidecar is the resource owner's concern**: Not part of EdProof. Resource owners build their own adapters for legacy resources
+5. **Revocation is possible**: The resource owner (or anyone their policy designates) can revoke a grant before TTL expires
+6. **Audit is complete**: Every request, grant, access, and revocation is logged with who, what, when, and why
+7. **Sidecar is the resource owner's concern**: Not part of the protocol. Resource owners build their own adapters for legacy resources
 8. **The verifier owns the decision**: Whether native or sidecar, the verifier applies its own policy on top of the grant
 
 ## Mapping
