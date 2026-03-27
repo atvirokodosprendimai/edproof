@@ -1,6 +1,6 @@
 # Brainstorm — EdProof Permission Grants for Bots and Services
 
-**Status:** active
+**Status:** complete
 **Date:** 2026-03-27
 
 ## Seed
