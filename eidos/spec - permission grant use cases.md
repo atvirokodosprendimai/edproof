@@ -21,18 +21,47 @@ Every use case assumes:
 
 ## Model
 
+### Discovery-First Flow
+
+The bot does not pre-know a resource's permission model. It **discovers requirements by trying**. The resource rejects the first attempt and tells the bot what to ask for — the bot learns, then applies.
+
 ```
 Bot                    Bot Owner              Resource Owner         Resource
+ │                        │                        │                    │
+ │ ─ ─ ─ ─ ─ ─  PHASE 0: DISCOVERY  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
+ │                        │                        │                    │
+ │── "let me in" ───────────────────────────────────────────────────►│
+ │   (identity credential │                        │                    │
+ │    only, no grant)      │                        │                    │
+ │                        │                        │                    │
+ │◄──────────────────────────────────────────── 401 + requirements ──│
+ │   { available_scopes:  │                        │   "here's what     │
+ │     [read, write:filter,│                       │    I accept"       │
+ │      write:task, admin],│                        │                    │
+ │     max_ttl: "24h",    │                        │                    │
+ │     approval_endpoint: │                        │                    │
+ │       "...",           │                        │                    │
+ │     grant_format: "..."│                        │                    │
+ │   }                    │                        │                    │
+ │                        │                        │                    │
+ │ ─ ─ ─ ─ ─ ─  PHASE 1: REQUEST  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│
  │                        │                        │                    │
  │── permission request ─►│                        │                    │
  │   (resource, scopes,   │                        │                    │
  │    TTL, identity proof) │                        │                    │
+ │   (scopes chosen from  │                        │                    │
+ │    discovery response)  │                        │                    │
+ │                        │                        │                    │
+ │ ─ ─ ─ ─ ─ ─  PHASE 2: APPROVAL  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │
+ │                        │                        │                    │
  │                        │── approved request ───►│                    │
  │                        │   (+ bot owner sig)     │                    │
  │                        │                        │── grant ──────────►│
  │◄── capability token ───┤◄───────────────────────┤  (registered)      │
  │   (dual-signed, scoped, │                        │                    │
  │    time-limited)        │                        │                    │
+ │                        │                        │                    │
+ │ ─ ─ ─ ─ ─ ─  PHASE 3: ACCESS  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │
  │                        │                        │                    │
  │── access request ─────────────────────────────────────────────────►│
  │   (identity credential │                        │                    │
@@ -45,7 +74,32 @@ Bot                    Bot Owner              Resource Owner         Resource
  │◄─────────────────────────────────────────────────── scoped response │
 ```
 
-For resources that don't support EdProof natively, the resource owner may implement a sidecar/proxy that sits in front of their resource, verifies the bot's identity and grant, and proxies authorized calls using the resource's native credentials. The sidecar is the resource owner's implementation concern — not part of EdProof.
+### Phase 0: Discovery
+
+The bot approaches a resource with only its EdProof identity credential. The resource:
+- Verifies the identity (valid EdProof credential)
+- Rejects access (no permission grant)
+- Returns a **requirements response** describing what the bot can request:
+  - Available scopes (what the resource offers)
+  - Maximum TTL (how long a grant can last)
+  - Approval endpoint (where to submit the request)
+  - Grant format (what kind of token the resource expects back)
+
+This is the ACME/DPoP pattern EdProof already uses for nonces — reject first, teach second.
+
+**Why this matters:**
+- Bots are generic — they don't need per-resource pre-configuration
+- New resources can appear and bots adapt — the resource advertises its own requirements
+- The resource owner controls what's requestable — the bot can't ask for things the resource doesn't offer
+- The bot can make an informed request (correct scopes, valid TTL) instead of guessing
+
+### Phase 1–3: Request, Approval, Access
+
+After discovery, the bot constructs a request using what the resource told it. The approval chain and access pattern proceed as described in the use cases below.
+
+### Sidecar Note
+
+For resources that don't support EdProof natively, the resource owner may implement a sidecar/proxy that sits in front of their resource. The sidecar handles discovery, verification, and proxying. This is the resource owner's implementation concern — not part of EdProof.
 
 > **RFC opportunity**: The permission request → approval → grant → access flow described in these use cases could become its own RFC (e.g., RFC-EDGRANT), built on EdProof identity as its foundation. EdProof stays identity-only; the grant protocol is a separate specification.
 
@@ -62,7 +116,25 @@ Gyros is Jira. Jira does not support EdProof natively — the Jira resource owne
 - Bot owner: Platform Team lead (fingerprint `SHA256:def2...`)
 - Resource owner: Project Alpha board owner (fingerprint `SHA256:ghi3...`)
 
-**Request**
+**Sidecar required** — Jira doesn't support EdProof natively.
+
+**Phase 0 — Discovery**
+Bot approaches the Jira sidecar with only its EdProof identity credential:
+```
+Bot → Sidecar:  POST /access  (identity credential, no grant)
+Sidecar → Bot:  401 Requirements
+  {
+    resource:         "gyros://board/project-alpha",
+    available_scopes: ["read", "write:filter", "write:task", "admin"],
+    max_ttl:          "4h",
+    approval_endpoint: "https://grants.internal/request",
+    description:      "Jira Project Alpha board"
+  }
+```
+Bot now knows what it can ask for and where to submit the request.
+
+**Phase 1 — Request**
+Bot constructs a request based on discovery, asking only for what it needs:
 ```
 resource:    gyros://board/project-alpha
 scopes:      [read]
@@ -70,18 +142,15 @@ ttl:         1h
 reason:      "Fetch task statuses for deploy summary report"
 ```
 
-**Approval chain**
+**Phase 2 — Approval**
 1. Bot owner (Platform Team lead): auto-approved by policy — "deploy-status-bot may request `read` on any gyros board for up to 4h"
 2. Resource owner (Project Alpha board owner): auto-approved by policy — "`read` scopes auto-approved for bots with verified EdProof identity"
 
-**Sidecar required** — Jira doesn't support EdProof natively.
-
-**Access pattern (via sidecar)**
-- Sidecar holds a Jira API token with project-scoped permissions
-- Bot presents identity credential + capability token to sidecar
+**Phase 3 — Access (via sidecar)**
+- Bot returns to sidecar with identity credential + capability token
 - Sidecar verifies: identity valid, grant signatures valid, TTL not expired, no revocation
 - Sidecar proxies read requests to Jira — write operations rejected at the sidecar
-- After 1h, the token expires. Bot must re-request if it needs more time
+- After 1h, the token expires. Bot must re-discover and re-request if it needs more time
 
 **Audit trail**
 - Request: `deploy-status-bot` requested `read` on `gyros://board/project-alpha` for 1h
