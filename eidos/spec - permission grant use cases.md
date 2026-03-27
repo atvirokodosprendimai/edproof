@@ -45,24 +45,15 @@ Bot                    Bot Owner              Resource Owner         Resource
  │◄─────────────────────────────────────────────────── scoped response │
 ```
 
-For resources that don't support EdProof natively, the **resource owner** implements a sidecar/proxy that sits in front of their resource, verifies the bot's identity and grant, and proxies authorized calls using the resource's native credentials. EdProof defines the **interface** the sidecar must implement — the sidecar itself is the resource owner's responsibility.
+For resources that don't support EdProof natively, the resource owner may implement a sidecar/proxy that sits in front of their resource, verifies the bot's identity and grant, and proxies authorized calls using the resource's native credentials. The sidecar is the resource owner's implementation concern — not part of EdProof.
 
-### Sidecar Interface (defined by EdProof)
-
-The sidecar must implement:
-1. **Verify identity** — validate the bot's EdProof credential (signature, fingerprint)
-2. **Verify grant** — validate the capability token (dual signatures, TTL, scopes)
-3. **Check revocation** — consult the permission registry for revocation entries
-4. **Enforce scopes** — proxy only operations that match the granted scopes; reject everything else
-5. **Audit** — log every proxied request and every rejection
-
-EdProof does not prescribe how the sidecar connects to the underlying resource. The Jira sidecar uses a Jira API token. The Grafana sidecar uses a Grafana service account. That's the resource owner's concern.
+> **RFC opportunity**: The permission request → approval → grant → access flow described in these use cases could become its own RFC (e.g., RFC-EDGRANT), built on EdProof identity as its foundation. EdProof stays identity-only; the grant protocol is a separate specification.
 
 ---
 
 ## Use Case A: Gyros (Jira)
 
-Gyros is Jira. Jira does not support EdProof natively — the **Jira resource owner** implements a sidecar that holds the Jira API token and proxies authorized operations. The sidecar implements the EdProof sidecar interface.
+Gyros is Jira. Jira does not support EdProof natively — the Jira resource owner implements a sidecar that holds the Jira API token and proxies authorized operations.
 
 ### A1. Bot reads a Jira board for status reporting
 
@@ -281,7 +272,7 @@ reason:      "Rolling deploy of api-gateway v2.8.0 per approved change request C
 
 ## Use Case D: Grafana (Observability)
 
-Grafana does not support EdProof natively — the **Grafana resource owner** implements a sidecar that holds Grafana service account credentials and proxies authorized operations. The sidecar implements the EdProof sidecar interface.
+Grafana does not support EdProof natively — the Grafana resource owner implements a sidecar that holds Grafana service account credentials and proxies authorized operations.
 
 ### D1. Bot reads specific dashboards for alerting logic
 
@@ -434,7 +425,7 @@ Every use case follows these principles:
 4. **Identity is stable, permissions are temporal**: EdProof credential lives for years; permission grants live for minutes to hours
 5. **Revocation is possible**: Any approver can revoke a grant before TTL expires
 6. **Audit is complete**: Every request, approval, access, and revocation is logged with who, what, when, and why
-7. **Sidecar is the resource owner's responsibility**: EdProof defines the sidecar interface; the resource owner implements it for their resource. Only needed for resources that don't support EdProof natively
+7. **Sidecar is the resource owner's concern**: Not part of EdProof. Resource owners build their own adapters for legacy resources
 8. **The verifier owns the decision**: Whether native or sidecar, the verifier applies its own policy on top of the grant
 
 ## Mapping
