@@ -140,10 +140,76 @@ Bot requests `publish` to a specific namespace for a CI/CD pipeline run. TTL = p
 **E4. Generic API Gateway Pattern**
 Gateway validates EdProof identity + permission grant. Translates grant scopes to API-level authorization. Gateway is the verifier — it owns the decision about what the scopes mean in its context.
 
+## Clarifications (from discussion)
+
+1. **Sidecar is an adapter, not the architecture.** Only needed for legacy resources (Jira, Grafana) that don't support EdProof natively. For EdProof-native resources, the resource itself is the verifier — no sidecar needed.
+2. **Approval flow: bot owner → resource owner (sequential).** Both approvals can be policies (automated). EdProof doesn't prescribe whether approval is human or automated — that's the approver's own policy.
+3. **EdProof = stable identity, period.** Permission grants are a completely separate concern that uses EdProof identity as its foundation. The credential never carries permissions.
+
 ## Clusters
 
-*To be filled after discussion*
+### Cluster 1: The Grant Artifact
+*What is a permission grant, physically?*
+
+**Standout: A3 (Dual-Signed Capability Token) + A2 (Permission Registry for revocation)**
+
+The grant is a self-contained, dual-signed document — a "visa" that the bot carries alongside its "passport" (EdProof credential). It contains: bot fingerprint, resource identifier, scopes, TTL, bot owner signature, resource owner signature.
+
+But the grant alone can't handle revocation (it's a document — you can't un-sign it). So revocation lives in a permission registry (A2) — a dataset the verifier may consult. This mirrors how EdProof identity works: the credential is a document, revocation is a registry concern.
+
+For legacy resources, a **sidecar** sits in front of the resource, holds the real credentials (e.g., full Jira API token), validates identity + grant, and proxies only the authorized calls. The sidecar is an implementation detail — the grant model is the same whether the verifier is native or a sidecar.
+
+### Cluster 2: The Request-Approve-Grant Flow
+*How does a grant come into existence?*
+
+**Standout: B1 (Sequential) + B3 (Policy-Gated)**
+
+The flow is:
+1. Bot creates a **request** (signed with its EdProof key): "I need read access to gyros board X for 1 hour"
+2. **Bot owner** evaluates the request — either manually or via policy (e.g., "auto-approve read scopes under 24h")
+3. **Resource owner** evaluates the approved request — either manually or via policy
+4. If both approve, a **grant** (capability token) is issued with both signatures
+
+Policy-gating (B3) is not a separate flow — it's how bot owners and resource owners implement their approval. EdProof doesn't dictate this.
+
+### Cluster 3: Scope and Resource Modeling
+*How do you express "what" the bot wants access to?*
+
+**Standout: C3 (Domain-Specific Scope Sets) with C1-style structure**
+
+Each resource domain defines its own scope vocabulary. The permission system carries the scopes as opaque structured data — `resource + action + constraints` — but the resource interprets them. No central scope registry.
+
+Structure: `{ resource: "<uri>", scopes: ["<action>", ...], constraints: { ... } }`
+
+The resource URI identifies the target. The scopes are domain-specific strings. Constraints are optional key-value pairs for fine-grained limits. The verifier (native or sidecar) maps these to whatever the underlying system supports.
+
+### Cluster 4: Verification and Legacy Adaptation
+*How does the resource check the grant at access time?*
+
+Two modes:
+- **EdProof-native resource**: Bot presents identity credential + capability token. Resource verifies signatures, checks TTL, checks revocation registry, evaluates scopes against its policy. The resource is the verifier.
+- **Legacy resource (sidecar)**: Sidecar sits in front. Bot presents identity + capability token to the sidecar. Sidecar verifies, then uses the real resource credentials (Jira API token, Grafana service account) to proxy the authorized calls. The sidecar is the verifier.
+
+### Cluster 5: Audit and Lifecycle
+*How do you know what happened?*
+
+**Standout: A4 (Git-native) for audit, D1 (Registry-based) for revocation**
+
+The entire lifecycle — request, approval, grant, usage, revocation — should be auditable. Git-signed commits as the audit trail (A4) is natural for EdProof. Revocation is a registry entry (D1). TTL expiry is automatic — no action needed.
+
+Data objects:
+- **Request**: bot fingerprint, resource, scopes, TTL, bot signature
+- **Bot Owner Approval**: request reference, bot owner fingerprint, bot owner signature (or policy reference)
+- **Resource Owner Approval**: request reference, resource owner fingerprint, resource owner signature (or policy reference)
+- **Grant (Capability Token)**: the dual-signed artifact with all of the above
+- **Revocation**: grant ID, revoker fingerprint, reason, revoker signature
 
 ## Standouts
 
-*To be filled after discussion*
+| # | Idea | Why |
+|---|------|-----|
+| 1 | **Dual-signed capability token** (A3) | Self-contained, offline-verifiable, follows EdProof's document model. The "visa" to EdProof's "passport." |
+| 2 | **Sequential approval with policy gates** (B1+B3) | Matches operational reality. Bot owner first, then resource owner. Both can automate via policy. |
+| 3 | **Domain-specific scopes** (C3) | Each resource defines its own vocabulary. No central authority. Matches EdProof's "verifier owns the decision." |
+| 4 | **Sidecar as legacy adapter** | Not an architectural requirement — just a bridge for resources that can't verify EdProof natively. |
+| 5 | **Registry-based revocation + Git audit trail** (D1+A4) | Revocation is a registry concern (consistent with EdProof identity revocation). Git provides tamper-evident audit. |
